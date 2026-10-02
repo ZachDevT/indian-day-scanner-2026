@@ -1,0 +1,5178 @@
+{
+  "openapi": "3.0.4",
+  "info": {
+    "title": "ETMS Gate-Scanning API (INDIA DAY 2026)",
+    "description": "REST API consumed by the ETMS Flutter gate-scanning app. All timestamps are UTC ISO 8601 (`...Z`).\r\n\r\n**Authentication**: `POST /api/v1/auth/login` returns a 15-minute JWT access token and a rotating refresh token. Send `Authorization: Bearer <accessToken>`.\r\nRoles: `Administrator` (ETMS SuperAdmin/Admin) and `GateScanner`. Gate scanners may list/search tickets (contact data masked), scan and view their own scan history.\r\n\r\n**Pagination**: `page` (1-based) and `pageSize` (default 50, max 100). Every list returns `pagination { page, pageSize, totalRecords, totalPages, hasNextPage, hasPreviousPage }`.\r\n\r\n**Errors**: RFC 7807 `application/problem+json` with `code` and `correlationId` (also in the `X-Correlation-ID` response header).\r\nValidation errors are `400` with an `errors` map. `401` missing/invalid token, `403` insufficient role, `404` not found, `409` conflict / invalid status transition / duplicate clientScanId,\r\n`422` semantically invalid (unknown gate, device mismatch), `429` rate limited (`Retry-After`), `503` database temporarily unavailable.\r\n\r\n**Scan result codes** (`POST /api/v1/ticket-scans`, HTTP 200 for every processed outcome, 409 for `DuplicateRequest`, 503 for `TemporarilyUnavailable`):\r\n`Valid` (admission granted), `AlreadyUsed`, `Invalid`, `Cancelled`, `Replaced`, `NotPaid`, `NotIssued`, `WrongEvent`, `Expired`, `UnauthorizedGate`, `DuplicateRequest`, `TemporarilyUnavailable`.\r\nExactly one of several simultaneous scans of the same ticket receives `Valid`; the others receive `AlreadyUsed`. Retrying with the same `clientScanId` replays the original result (`replayed: true`).",
+    "contact": {
+      "name": "ETMS Operations",
+      "email": "support@example.org"
+    },
+    "version": "1.0"
+  },
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Sign in with ETMS credentials and obtain a short-lived access token plus a rotating refresh token.",
+        "description": "Accounts must be active, not locked, not flagged for a forced password change, and hold the SuperAdmin, Admin or GateScanner role.\r\nTokens are bound to `deviceId`. Store both tokens in platform secure storage (Keychain / Keystore), never in shared preferences.\r\nRate limit: 10 requests per minute per IP address. Account lockout after 5 failed attempts (15 minutes, same policy as the web application).\n\n**Authentication:** none (anonymous, rate limited per IP).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              },
+              "example": {
+                "username": "scanner1@example.org",
+                "password": "secure-password",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              },
+              "example": {
+                "username": "scanner1@example.org",
+                "password": "secure-password",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              },
+              "example": {
+                "username": "scanner1@example.org",
+                "password": "secure-password",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated; tokens issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                },
+                "example": {
+                  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3YzllNjY3OS03NDI1LTQwZGUtOTQ0Yi1lMDdmYzFmOTBhZTciLCJyb2xlIjoiR2F0ZVNjYW5uZXIifQ.signature",
+                  "refreshToken": "mZ1n7kQxL0pJ3vW8eR5tY2uI9oP4aS6dF1gH7jK0lZ3xC5vB8nM2qW4eR6tY8uI0oP",
+                  "tokenType": "Bearer",
+                  "expiresIn": 900,
+                  "refreshExpiresIn": 604800,
+                  "accessTokenExpiresAtUtc": "2026-10-03T15:15:00.000Z",
+                  "user": {
+                    "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                    "name": "Scanning Officer",
+                    "username": "scanner1@example.org",
+                    "role": "GateScanner",
+                    "defaultGate": {
+                      "id": "G1",
+                      "name": "Main Gate"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/ValidationFailed",
+                  "title": "One or more validation errors occurred.",
+                  "status": 400,
+                  "errors": {
+                    "pageSize": [
+                      "The field PageSize must be between 1 and 100."
+                    ],
+                    "sortBy": [
+                      "Allowed values: issueDate, scannedDate, ticketNumber, attendeeName, customerName, status, category."
+                    ]
+                  },
+                  "code": "ValidationFailed",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials, locked or inactive account (`code`: InvalidCredentials, AccountLocked, AccountInactive).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "examples": {
+                  "Invalid credentials": {
+                    "summary": "Invalid credentials",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/InvalidCredentials",
+                      "title": "Invalid user name or password.",
+                      "status": 401,
+                      "code": "InvalidCredentials",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Account locked": {
+                    "summary": "Account locked",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/AccountLocked",
+                      "title": "The account is temporarily locked after repeated failed sign-in attempts. Try again later.",
+                      "status": 401,
+                      "code": "AccountLocked",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Password change required or role not permitted (`code`: PasswordChangeRequired, RoleNotPermitted).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/PasswordChangeRequired",
+                  "title": "You must change your password in the ETMS web application before using the mobile app.",
+                  "status": 403,
+                  "code": "PasswordChangeRequired",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/RateLimited",
+                  "title": "Too many requests. Slow down and retry later.",
+                  "status": 429,
+                  "instance": "/api/v1/auth/login",
+                  "code": "RateLimited",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Exchange a refresh token for a new access token and a NEW refresh token (rotation).",
+        "description": "The presented refresh token is consumed. Presenting a consumed or revoked token again is treated as theft: the whole token family is revoked\r\nand the app must sign in again (`code`: RefreshTokenReused). The `deviceId` must match the one used at login.\n\n**Authentication:** none (anonymous, rate limited per IP).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              },
+              "example": {
+                "refreshToken": "mZ1n7kQxL0pJ3vW8eR5tY2uI9oP4aS6dF1gH7jK0lZ3xC5vB8nM2qW4eR6tY8uI0oP",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              },
+              "example": {
+                "refreshToken": "mZ1n7kQxL0pJ3vW8eR5tY2uI9oP4aS6dF1gH7jK0lZ3xC5vB8nM2qW4eR6tY8uI0oP",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              },
+              "example": {
+                "refreshToken": "mZ1n7kQxL0pJ3vW8eR5tY2uI9oP4aS6dF1gH7jK0lZ3xC5vB8nM2qW4eR6tY8uI0oP",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New token pair.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired, reused or device-mismatched refresh token; inactive account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "examples": {
+                  "Reuse detected": {
+                    "summary": "Reuse detected",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/RefreshTokenReused",
+                      "title": "This refresh token was already used. All sessions of this login were terminated; sign in again.",
+                      "status": 401,
+                      "code": "RefreshTokenReused",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Expired": {
+                    "summary": "Expired",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/RefreshTokenExpired",
+                      "title": "The session has expired. Sign in again.",
+                      "status": 401,
+                      "code": "RefreshTokenExpired",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Sign out: revokes the refresh token (and its rotation family) and denies the current access token immediately.",
+        "description": "Without a body the refresh tokens of the calling device are revoked. `allDevices: true` terminates every session of the user.\n\n**Requires:** Bearer token; role any authenticated user.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutRequest"
+              },
+              "example": {
+                "refreshToken": "mZ1n7kQxL0pJ3vW8eR5tY2uI9oP4aS6dF1gH7jK0lZ3xC5vB8nM2qW4eR6tY8uI0oP",
+                "allDevices": false
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutRequest"
+              },
+              "example": {
+                "refreshToken": "mZ1n7kQxL0pJ3vW8eR5tY2uI9oP4aS6dF1gH7jK0lZ3xC5vB8nM2qW4eR6tY8uI0oP",
+                "allDevices": false
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutRequest"
+              },
+              "example": {
+                "refreshToken": "mZ1n7kQxL0pJ3vW8eR5tY2uI9oP4aS6dF1gH7jK0lZ3xC5vB8nM2qW4eR6tY8uI0oP",
+                "allDevices": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Signed out."
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Profile of the authenticated officer, the device bound to the token and the active event.",
+        "description": "\n\n**Requires:** Bearer token; role any authenticated user.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/revoke": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Administrator: terminate every mobile session of a user (lost device, staff change). Also invalidates outstanding access tokens.",
+        "description": "\n\n**Requires:** Bearer token; role Administrator (SuperAdmin, Admin).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionsRequest"
+              },
+              "example": {
+                "userId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                "reason": "Device reported lost"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionsRequest"
+              },
+              "example": {
+                "userId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                "reason": "Device reported lost"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionsRequest"
+              },
+              "example": {
+                "userId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                "reason": "Device reported lost"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sessions revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeSessionsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/corporate-dinner-passes": {
+      "get": {
+        "tags": [
+          "CorporateDinnerPasses"
+        ],
+        "summary": "Download the individual Corporate Dinner passes of the active event (paged, incremental): pass id and number, attendee name, batch, status and entry state with the original entry time.",
+        "description": "First call without `cursor`; keep calling while `hasMore`; store `nextCursor` after the run and pass it next time to receive only\r\npasses changed since (new, used, cancelled). Items are upserts keyed by `passId` / `passNumber`. The QR secret is never included:\r\nthe pass QR is an encrypted token that only the server can verify.\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: DinnerPass). No operator login.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of passes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerSyncPageOfScannerDinnerPassRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/corporate-dinner-passes/scans": {
+      "post": {
+        "tags": [
+          "CorporateDinnerPasses"
+        ],
+        "summary": "Scan Corporate Dinner Pass: verify the `CDP1.` pass QR and record the first entry atomically (pass Issued → Used, server UTC time).",
+        "description": "Every later scan of the same pass returns `AlreadyUsed` with the original entry time (`firstEntryAtUtc`, `firstEntryLocal`) and never\r\nchanges it; two devices scanning concurrently get exactly one `Valid`. Retrying with the same `clientScanId` replays the stored result\r\n(`replayed: true`). A ticket QR is `WrongCredentialType`; a cancelled pass is `Cancelled`; an unknown or tampered QR is `Invalid`.\r\n409 = `DuplicateRequest` (same id, different payload), 503 = `TemporarilyUnavailable` (nothing recorded - retry with the same id).\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: DinnerPass). No operator login.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scan processed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "clientScanId already used for a different scan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Scan service unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/ticket-categories": {
+      "get": {
+        "tags": [
+          "ReferenceData"
+        ],
+        "summary": "Ticket categories of the active event (for filters and display).",
+        "description": "\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Categories ordered by display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfListOfTicketCategoryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/gates": {
+      "get": {
+        "tags": [
+          "ReferenceData"
+        ],
+        "summary": "Gates of the active event. Use `id` (the gate code) as `gateId` when scanning.",
+        "description": "\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Gates ordered by code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfListOfGateDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/enrol": {
+      "post": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "First start: exchange the administrator-issued enrolment code (typed or scanned from the provisioning QR) for the device token.",
+        "description": "The code is single-use and short-lived; the returned `deviceToken` is shown once - store it in platform secure storage and send it as\r\n`X-Device-Token` on every other scanner call. Rate limit: 10 per minute per IP. Unknown, used, expired and revoked codes all answer 401\r\n`InvalidEnrolmentCode`.\n\n**Authentication:** none (anonymous, rate limited per IP).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerEnrolRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerEnrolRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerEnrolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Device enrolled; token issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerEnrolResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Enrolment code not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scanner/device": {
+      "get": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "The device's own record: name, scopes, active event, server time and the scanner settings (Gen-Z opening time, batch limits).",
+        "description": "\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: any). No operator login.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Device information.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerDeviceInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/device/rotate": {
+      "post": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "Rotate the device token. The previous token stays valid for a short grace period (Scanner:TokenRotationGraceMinutes).",
+        "description": "\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: any). No operator login.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerRotateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/tickets": {
+      "get": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "Download tickets of the active event (incremental): attendee name, ticket number, category, table, status, entry state, Gen-Z entitlement and Gen-Z entry state.",
+        "description": "First call without `cursor`; keep calling while `hasMore`; store `nextCursor` and pass it on the next run to receive only records\r\nchanged since (row-version based). Records are upserts keyed by `ticketId`. No contact data and no QR payload are included.\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: any). No operator login.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of tickets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerSyncPageOfScannerTicketRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/dinner-passes": {
+      "get": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "Download Corporate Dinner passes of the active event (incremental): pass number, recipient name, batch, status and entry state.",
+        "description": "\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: any). No operator login.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of passes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerSyncPageOfScannerDinnerPassRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/tickets/scan": {
+      "post": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "Scan Ticket Entry: verify an INDIA DAY 2026 ticket QR and record the regular admission (Issued → Used) atomically.",
+        "description": "Every processed outcome is HTTP 200 with a stable `result`. `AlreadyUsed` carries the original entry time (`firstEntryAtUtc`,\r\n`firstEntryLocal`) and never changes it. A dinner pass QR is `WrongCredentialType`. Retrying with the same `clientScanId` replays the\r\noriginal result (`replayed: true`). 409 = `DuplicateRequest`, 503 = `TemporarilyUnavailable` (nothing changed - retry with the same id).\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: Ticket). No operator login.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scan processed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "clientScanId already used for a different scan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Scan service unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/genz/scan": {
+      "post": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "Scan Gen Z Access: verify the SAME ticket QR and record the Gen-Z Dancing Area entry, independently of the regular entry.",
+        "description": "Requires a paid, active Gen-Z entitlement on the ticket (`NotEligible` otherwise). `BeforeStartTime` before `GenZ.AccessStartTime`\r\n(event local time). With re-entry allowed by the organisers (setting `GenZ.SingleEntry` = false) a later scan is still `AlreadyUsed` with the\r\nfirst entry time but `reEntryAllowed: true`. Regular ticket entry is NOT required first unless the server is configured so (`EntryRequired`).\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: GenZ). No operator login.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scan processed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/dinner-passes/scan": {
+      "post": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "Scan Corporate Dinner Pass: verify a `CDP1.` pass QR and record the dinner entry (pass Issued → Used) atomically. A ticket QR is `WrongCredentialType`.",
+        "description": "\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: DinnerPass). No operator login.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerScanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scan processed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerScanResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner/sync": {
+      "post": {
+        "tags": [
+          "Scanner"
+        ],
+        "summary": "Upload scans captured while offline (any mix of the three types). Each item gets its own final result; the batch itself always succeeds.",
+        "description": "Items are processed in order through exactly the same logic as the live endpoints, so a retried batch replays the stored results. `accepted` = false\r\nonly for `TemporarilyUnavailable` (keep the item and resend). `conflict` = true when the app had shown `offlineDecision: Admitted` but the\r\nserver's authoritative outcome is different - typically `AlreadyUsed` because another device admitted the credential first; show the operator\r\nthe server result and the original entry time. Offline screens must say \"pending confirmation\", never \"admitted\", until the item is accepted as Valid.\n\n**Requires:** `X-Device-Token` of a provisioned scanner device (scope: any). No operator login.",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerSyncRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerSyncRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScannerSyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-item results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerSyncResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired device token."
+          },
+          "403": {
+            "description": "The device's scopes do not include this action."
+          }
+        },
+        "security": [
+          {
+            "DeviceToken": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner-devices": {
+      "post": {
+        "tags": [
+          "ScannerDevices"
+        ],
+        "summary": "Create a device and receive its single-use enrolment code (and the provisioning QR text). Shown once.",
+        "description": "\n\n**Requires:** Bearer token; role Administrator (SuperAdmin, Admin).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScannerDeviceRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScannerDeviceRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScannerDeviceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Device created; enrolment code issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfScannerDeviceEnrolmentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "ScannerDevices"
+        ],
+        "summary": "Devices of the active event with status, last activity and token hint (never the token).",
+        "description": "\n\n**Requires:** Bearer token; role Administrator (SuperAdmin, Admin).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Devices.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfListOfScannerDeviceAdminDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner-devices/{deviceId}/revoke": {
+      "post": {
+        "tags": [
+          "ScannerDevices"
+        ],
+        "summary": "Revoke a device (lost phone, staff change): its token stops working immediately on this node and within the cache window elsewhere.",
+        "description": "\n\n**Requires:** Bearer token; role Administrator (SuperAdmin, Admin).",
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeScannerDeviceRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeScannerDeviceRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeScannerDeviceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Device revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfScannerDeviceAdminDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Device not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scanner-devices/{deviceId}/re-enrol": {
+      "post": {
+        "tags": [
+          "ScannerDevices"
+        ],
+        "summary": "Issue a new enrolment code for an existing device (re-install, replacement phone under the same name). The current token keeps working until the new enrolment completes, then only during the rotation grace period.",
+        "description": "\n\n**Requires:** Bearer token; role Administrator (SuperAdmin, Admin).",
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReEnrolScannerDeviceRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReEnrolScannerDeviceRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReEnrolScannerDeviceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New enrolment code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfScannerDeviceEnrolmentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/scans/recent": {
+      "get": {
+        "tags": [
+          "Scans"
+        ],
+        "summary": "Recent scans, newest first. Gate scanners see only their own scans; administrators see all (optionally filtered by officer).",
+        "description": "\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "example": 1
+            },
+            "example": 1
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "example": 50
+            },
+            "example": 50
+          },
+          {
+            "name": "gateId",
+            "in": "query",
+            "description": "Gate code.",
+            "schema": {
+              "maxLength": 20,
+              "type": "string",
+              "example": "G1"
+            },
+            "example": "G1"
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "description": "Valid, AlreadyUsed, Invalid, Cancelled, Replaced, NotApproved, WrongEvent, Expired, NotFound, GateClosed.",
+            "schema": {
+              "maxLength": 30,
+              "type": "string"
+            }
+          },
+          {
+            "name": "admissionsOnly",
+            "in": "query",
+            "description": "Only admissions (result Valid).",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "query",
+            "description": "Administrators only: scans of a specific officer. Gate scanners always see their own scans.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of scans.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedResponseOfRecentScanDto"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "scanId": 1234,
+                      "scannedAtUtc": "2026-10-03T15:02:11.000Z",
+                      "result": "Valid",
+                      "admissionGranted": true,
+                      "isReversed": false,
+                      "ticketId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                      "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                      "attendeeName": "John Doe",
+                      "category": "VVIP",
+                      "gate": {
+                        "id": "G1",
+                        "name": "Main Gate"
+                      },
+                      "officerName": "Scanning Officer",
+                      "deviceId": "flutter-3f6c2a8e7b1d4c5e",
+                      "message": "Ticket valid. Entry granted."
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "pageSize": 50,
+                    "totalRecords": 1,
+                    "totalPages": 1,
+                    "hasNextPage": false,
+                    "hasPreviousPage": false
+                  },
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/tickets": {
+      "get": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "Paged, filterable list of tickets. All authorised records are reachable through pagination (max 100 per page).",
+        "description": "Gate scanners receive masked purchaser phone/e-mail (`customer.isMasked = true`); administrators receive complete permitted contact data.\r\nSortable columns: issueDate (default, desc), scannedDate, ticketNumber, attendeeName, customerName, status, category. Every read is audited.\r\nExample: `GET /api/v1/tickets?page=1&pageSize=50&status=Issued&categoryId=2&search=John`\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number.",
+            "schema": {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "example": 1
+            },
+            "example": 1
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Records per page (default 50, maximum 100 - larger values are clamped).",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "example": 50
+            },
+            "example": 50
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Free text: ticket number, attendee name, purchaser name, e-mail or phone.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string",
+              "example": "John"
+            },
+            "example": "John"
+          },
+          {
+            "name": "ticketNumber",
+            "in": "query",
+            "schema": {
+              "maxLength": 30,
+              "type": "string",
+              "example": "INDIAD-X7K9-P2MQ-4H8N"
+            },
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          {
+            "name": "customerName",
+            "in": "query",
+            "schema": {
+              "maxLength": 200,
+              "type": "string",
+              "example": "Jane Doe"
+            },
+            "example": "Jane Doe"
+          },
+          {
+            "name": "attendeeName",
+            "in": "query",
+            "schema": {
+              "maxLength": 200,
+              "type": "string",
+              "example": "John Doe"
+            },
+            "example": "John Doe"
+          },
+          {
+            "name": "phone",
+            "in": "query",
+            "schema": {
+              "maxLength": 30,
+              "type": "string",
+              "example": "+256700000000"
+            },
+            "example": "+256700000000"
+          },
+          {
+            "name": "email",
+            "in": "query",
+            "schema": {
+              "maxLength": 256,
+              "type": "string",
+              "example": "jane@example.com"
+            },
+            "example": "jane@example.com"
+          },
+          {
+            "name": "categoryId",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "example": 2
+            },
+            "example": 2
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Pending, Approved, Issued, Used, Cancelled, Replaced, Rejected, Expired.",
+            "schema": {
+              "maxLength": 20,
+              "type": "string",
+              "example": "Issued"
+            },
+            "example": "Issued"
+          },
+          {
+            "name": "gateId",
+            "in": "query",
+            "description": "Gate code at which the ticket was admitted.",
+            "schema": {
+              "maxLength": 20,
+              "type": "string",
+              "example": "G1"
+            },
+            "example": "G1"
+          },
+          {
+            "name": "paymentStatus",
+            "in": "query",
+            "description": "Paid, PartiallyPaid, Pending, Waived.",
+            "schema": {
+              "maxLength": 20,
+              "type": "string",
+              "example": "Paid"
+            },
+            "example": "Paid"
+          },
+          {
+            "name": "issuedFrom",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "example": "2026-09-01T00:00:00Z"
+            },
+            "example": "2026-09-01T00:00:00Z"
+          },
+          {
+            "name": "issuedTo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "example": "2026-10-04T00:00:00Z"
+            },
+            "example": "2026-10-04T00:00:00Z"
+          },
+          {
+            "name": "scannedFrom",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "example": "2026-10-03T12:00:00Z"
+            },
+            "example": "2026-10-03T12:00:00Z"
+          },
+          {
+            "name": "scannedTo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "example": "2026-10-04T00:00:00Z"
+            },
+            "example": "2026-10-04T00:00:00Z"
+          },
+          {
+            "name": "sortBy",
+            "in": "query",
+            "description": "issueDate (default), scannedDate, ticketNumber, attendeeName, customerName, status, category.",
+            "schema": {
+              "maxLength": 30,
+              "type": "string",
+              "example": "issueDate"
+            },
+            "example": "issueDate"
+          },
+          {
+            "name": "sortDirection",
+            "in": "query",
+            "description": "asc or desc (default desc).",
+            "schema": {
+              "maxLength": 4,
+              "type": "string",
+              "example": "desc"
+            },
+            "example": "desc"
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of tickets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedResponseOfTicketSummaryDto"
+                },
+                "examples": {
+                  "Administrator (full contact data)": {
+                    "summary": "Administrator (full contact data)",
+                    "value": {
+                      "data": [
+                        {
+                          "ticketId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                          "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                          "status": "Issued",
+                          "ticketType": "Paid",
+                          "category": {
+                            "id": 2,
+                            "code": "VVIP",
+                            "name": "VVIP"
+                          },
+                          "attendee": {
+                            "name": "John Doe"
+                          },
+                          "customer": {
+                            "name": "Jane Doe",
+                            "phone": "+256700000000",
+                            "email": "jane@example.com",
+                            "isMasked": false
+                          },
+                          "payment": {
+                            "status": "Paid",
+                            "amount": 750000,
+                            "currency": "UGX",
+                            "method": "PESAPAL"
+                          },
+                          "issueDateUtc": "2026-09-07T10:00:00.000Z",
+                          "scannedDateUtc": null,
+                          "gate": null,
+                          "tableNumber": null
+                        }
+                      ],
+                      "pagination": {
+                        "page": 1,
+                        "pageSize": 50,
+                        "totalRecords": 10000,
+                        "totalPages": 200,
+                        "hasNextPage": true,
+                        "hasPreviousPage": false
+                      },
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Gate scanner (masked)": {
+                    "summary": "Gate scanner (masked)",
+                    "value": {
+                      "data": [
+                        {
+                          "ticketId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                          "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                          "status": "Issued",
+                          "ticketType": "Paid",
+                          "category": {
+                            "id": 2,
+                            "code": "VVIP",
+                            "name": "VVIP"
+                          },
+                          "attendee": {
+                            "name": "John Doe"
+                          },
+                          "customer": {
+                            "name": "Jane Doe",
+                            "phone": "+2567******00",
+                            "email": "j***@example.com",
+                            "isMasked": true
+                          },
+                          "payment": {
+                            "status": "Paid",
+                            "amount": 750000,
+                            "currency": "UGX",
+                            "method": "PESAPAL"
+                          },
+                          "issueDateUtc": "2026-09-07T10:00:00.000Z",
+                          "scannedDateUtc": null,
+                          "gate": null,
+                          "tableNumber": null
+                        }
+                      ],
+                      "pagination": {
+                        "page": 1,
+                        "pageSize": 50,
+                        "totalRecords": 10000,
+                        "totalPages": 200,
+                        "hasNextPage": true,
+                        "hasPreviousPage": false
+                      },
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter, sort column or page size.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/ValidationFailed",
+                  "title": "One or more validation errors occurred.",
+                  "status": 400,
+                  "errors": {
+                    "pageSize": [
+                      "The field PageSize must be between 1 and 100."
+                    ],
+                    "sortBy": [
+                      "Allowed values: issueDate, scannedDate, ticketNumber, attendeeName, customerName, status, category."
+                    ]
+                  },
+                  "code": "ValidationFailed",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/tickets/{ticketId}": {
+      "get": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "Ticket by its secure public reference (GUID).",
+        "description": "Administrators additionally receive `rowVersion` (for status changes), the status history and the cancellation reason.\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ticket detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfTicketDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No ticket with this reference in the active event.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/NotFound",
+                  "title": "Ticket not found.",
+                  "status": 404,
+                  "instance": "/api/v1/tickets/number/UNKNOWN",
+                  "code": "NotFound",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/tickets/number/{ticketNumber}": {
+      "get": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "Ticket by printed ticket number (fast lookup for manual entry when the QR cannot be read; does NOT admit).",
+        "description": "\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "ticketNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 30,
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ticket detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfTicketDetailDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No ticket with this number in the active event.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/NotFound",
+                  "title": "Ticket not found.",
+                  "status": 404,
+                  "instance": "/api/v1/tickets/number/UNKNOWN",
+                  "code": "NotFound",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/tickets/{ticketId}/status": {
+      "patch": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "Administrator-controlled status change with optimistic concurrency and a mandatory reason.",
+        "description": "Whitelisted transitions: Pending/Approved/Issued → `Cancelled`; Issued → `Expired`; Expired → `Issued` (reinstate).\r\n`Used` can never be set here (scan endpoint only); Cancelled/Replaced tickets cannot be changed. A stale `rowVersion` yields 409.\r\nRecords old status, new status, administrator, reason and timestamp in TicketStatusHistory and AuditLogs.\n\n**Requires:** Bearer token; role Administrator (SuperAdmin, Admin).",
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTicketStatusRequest"
+              },
+              "example": {
+                "status": "Cancelled",
+                "reason": "Refund approved",
+                "rowVersion": "AAAAAAAAB9E="
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTicketStatusRequest"
+              },
+              "example": {
+                "status": "Cancelled",
+                "reason": "Refund approved",
+                "rowVersion": "AAAAAAAAB9E="
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTicketStatusRequest"
+              },
+              "example": {
+                "status": "Cancelled",
+                "reason": "Refund approved",
+                "rowVersion": "AAAAAAAAB9E="
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Status changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfTicketStatusChangeResponse"
+                },
+                "example": {
+                  "data": {
+                    "ticketId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                    "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                    "previousStatus": "Issued",
+                    "newStatus": "Cancelled",
+                    "changedAtUtc": "2026-09-07T10:30:02.000Z",
+                    "changedBy": "admin@example.org",
+                    "reason": "Refund approved",
+                    "rowVersion": "AAAAAAAAB9I="
+                  },
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error (unknown status, bad rowVersion, reason too short).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Gate scanners cannot change ticket status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/Forbidden",
+                  "title": "You are not permitted to perform this operation.",
+                  "status": 403,
+                  "instance": "/api/v1/tickets/0f8fad5b-d9cb-469f-a165-70867728950e/status",
+                  "code": "Forbidden",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ticket not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Transition not permitted or concurrency conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "examples": {
+                  "Invalid transition": {
+                    "summary": "Invalid transition",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/InvalidStatusTransition",
+                      "title": "A ticket becomes Used only through a verified scan (POST /api/v1/ticket-scans). Status updates cannot admit a ticket.",
+                      "status": 409,
+                      "code": "InvalidStatusTransition",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Concurrency conflict": {
+                    "summary": "Concurrency conflict",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/ConcurrencyConflict",
+                      "title": "The ticket was modified by someone else. Reload it and retry with the new rowVersion.",
+                      "status": 409,
+                      "code": "ConcurrencyConflict",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/tickets/{ticketId}/entry-reversal": {
+      "post": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "Administrator-only reversal of an admission (Used → Issued) with a mandatory reason and complete audit logging.",
+        "description": "\n\n**Requires:** Bearer token; role Administrator (SuperAdmin, Admin).",
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryReversalRequest"
+              },
+              "example": {
+                "reason": "Scanned by mistake at the wrong gate"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryReversalRequest"
+              },
+              "example": {
+                "reason": "Scanned by mistake at the wrong gate"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryReversalRequest"
+              },
+              "example": {
+                "reason": "Scanned by mistake at the wrong gate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Entry reversed; the ticket can be scanned again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponseOfTicketStatusChangeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ticket not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The ticket has no live admission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/ticket-scans": {
+      "post": {
+        "tags": [
+          "TicketScans"
+        ],
+        "summary": "Validate a scanned QR payload and, when valid, atomically mark the ticket as used.",
+        "description": "Server-side steps: authenticate/authorise the officer → validate the request → verify QR structure, version and HMAC signature →\r\nfind the ticket → confirm INDIA DAY 2026 → confirm payment (paid tickets) → confirm Issued → reject cancelled/replaced/expired/not issued →\r\ndetect already used → atomically Issued→Used under a row lock → record server entry time, gate, officer, device and clientScanId →\r\nwrite status history and audit → return the result.\r\n            \r\n**HTTP status behaviour:** every processed outcome (Valid, AlreadyUsed, Cancelled, Replaced, NotPaid, NotIssued, WrongEvent, Expired,\r\nUnauthorizedGate, Invalid) is HTTP **200** with a stable `result` code so the app handles them uniformly. **409** = `DuplicateRequest`\r\n(same clientScanId, different payload). **422** = unknown gate or device mismatch (problem body). **503** = `TemporarilyUnavailable` (nothing changed - retry with the same clientScanId).\r\n            \r\n**Idempotency:** the same `clientScanId` always returns the original result (`replayed: true`) without creating another scan record.\r\nThe device clock (`scannedAtUtc`) is stored for diagnostics only; the official entry time is the database clock.\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketScanRequest"
+              },
+              "example": {
+                "qrPayload": "ETMS.AQEBAAAAX1pdY2pLQ1J0XJ3q6IzDHqFq5HpGpWlq.k7fB7Ep9G3c8MfJ0nZ4x2QXhYh7Wq1a6qE6gYq0d5tE",
+                "gateId": "G1",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e",
+                "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                "scannedAtUtc": "2026-10-03T15:02:09Z"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketScanRequest"
+              },
+              "example": {
+                "qrPayload": "ETMS.AQEBAAAAX1pdY2pLQ1J0XJ3q6IzDHqFq5HpGpWlq.k7fB7Ep9G3c8MfJ0nZ4x2QXhYh7Wq1a6qE6gYq0d5tE",
+                "gateId": "G1",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e",
+                "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                "scannedAtUtc": "2026-10-03T15:02:09Z"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketScanRequest"
+              },
+              "example": {
+                "qrPayload": "ETMS.AQEBAAAAX1pdY2pLQ1J0XJ3q6IzDHqFq5HpGpWlq.k7fB7Ep9G3c8MfJ0nZ4x2QXhYh7Wq1a6qE6gYq0d5tE",
+                "gateId": "G1",
+                "deviceId": "flutter-3f6c2a8e7b1d4c5e",
+                "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                "scannedAtUtc": "2026-10-03T15:02:09Z"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scan processed (check `result` and `admissionGranted`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketScanResponse"
+                },
+                "examples": {
+                  "Valid": {
+                    "summary": "Valid",
+                    "value": {
+                      "result": "Valid",
+                      "admissionGranted": true,
+                      "message": "Ticket valid. Entry granted.",
+                      "ticket": {
+                        "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                        "attendeeName": "John Doe",
+                        "category": "VVIP",
+                        "ticketType": "Paid",
+                        "status": "Used",
+                        "entryTimeUtc": "2026-10-03T15:02:11.000Z",
+                        "gate": "Main Gate",
+                        "previousEntryTimeUtc": null,
+                        "previousGate": null,
+                        "tableNumber": "VIP-042",
+                        "genZAccess": true,
+                        "genZStatus": "Active",
+                        "genZAccessStartTime": "22:30"
+                      },
+                      "replayed": false,
+                      "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                      "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "AlreadyUsed": {
+                    "summary": "AlreadyUsed",
+                    "value": {
+                      "result": "AlreadyUsed",
+                      "admissionGranted": false,
+                      "message": "This ticket has already been used.",
+                      "ticket": {
+                        "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                        "attendeeName": "John Doe",
+                        "category": "VVIP",
+                        "ticketType": "Paid",
+                        "status": "Used",
+                        "entryTimeUtc": null,
+                        "gate": null,
+                        "previousEntryTimeUtc": "2026-10-03T14:55:00.000Z",
+                        "previousGate": "Main Gate",
+                        "tableNumber": null,
+                        "genZAccess": false,
+                        "genZStatus": "NotSelected",
+                        "genZAccessStartTime": null
+                      },
+                      "replayed": false,
+                      "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                      "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Cancelled": {
+                    "summary": "Cancelled",
+                    "value": {
+                      "result": "Cancelled",
+                      "admissionGranted": false,
+                      "message": "This ticket has been cancelled.",
+                      "ticket": {
+                        "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                        "attendeeName": "John Doe",
+                        "category": "VVIP",
+                        "ticketType": "Paid",
+                        "status": "Cancelled",
+                        "entryTimeUtc": null,
+                        "gate": null,
+                        "previousEntryTimeUtc": null,
+                        "previousGate": null,
+                        "tableNumber": null,
+                        "genZAccess": false,
+                        "genZStatus": "NotSelected",
+                        "genZAccessStartTime": null
+                      },
+                      "replayed": false,
+                      "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                      "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "NotPaid": {
+                    "summary": "NotPaid",
+                    "value": {
+                      "result": "NotPaid",
+                      "admissionGranted": false,
+                      "message": "Payment for this ticket is incomplete. Refer to the ticket desk.",
+                      "ticket": {
+                        "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                        "attendeeName": "John Doe",
+                        "category": "VVIP",
+                        "ticketType": "Paid",
+                        "status": "Issued",
+                        "entryTimeUtc": null,
+                        "gate": null,
+                        "previousEntryTimeUtc": null,
+                        "previousGate": null,
+                        "tableNumber": null,
+                        "genZAccess": false,
+                        "genZStatus": "NotSelected",
+                        "genZAccessStartTime": null
+                      },
+                      "replayed": false,
+                      "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                      "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Invalid": {
+                    "summary": "Invalid",
+                    "value": {
+                      "result": "Invalid",
+                      "admissionGranted": false,
+                      "message": "Invalid ticket code: Signature mismatch.",
+                      "ticket": null,
+                      "replayed": false,
+                      "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                      "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Replayed retry": {
+                    "summary": "Replayed retry",
+                    "value": {
+                      "result": "Valid",
+                      "admissionGranted": true,
+                      "message": "Ticket valid. Entry granted.",
+                      "ticket": {
+                        "ticketNumber": "INDIAD-X7K9-P2MQ-4H8N",
+                        "attendeeName": "John Doe",
+                        "category": "VVIP",
+                        "ticketType": "Paid",
+                        "status": "Used",
+                        "entryTimeUtc": "2026-10-03T15:02:11.000Z",
+                        "gate": "Main Gate",
+                        "previousEntryTimeUtc": null,
+                        "previousGate": null,
+                        "tableNumber": null,
+                        "genZAccess": false,
+                        "genZStatus": "NotSelected",
+                        "genZAccessStartTime": null
+                      },
+                      "replayed": true,
+                      "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                      "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblemDetails"
+                },
+                "example": {
+                  "type": "https://tickets.example.com/problems/ValidationFailed",
+                  "title": "One or more validation errors occurred.",
+                  "status": 400,
+                  "errors": {
+                    "clientScanId": [
+                      "The ClientScanId field is required."
+                    ],
+                    "qrPayload": [
+                      "The field QrPayload must be a string with a minimum length of 10 and a maximum length of 512."
+                    ]
+                  },
+                  "code": "ValidationFailed",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "clientScanId already used for a different scan (`result: DuplicateRequest`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketScanResponse"
+                },
+                "example": {
+                  "result": "DuplicateRequest",
+                  "admissionGranted": false,
+                  "message": "This clientScanId was already used for a different scan. Generate a new clientScanId for a new scan.",
+                  "ticket": null,
+                  "replayed": true,
+                  "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                  "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown gate or deviceId does not match the token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "examples": {
+                  "Unknown gate": {
+                    "summary": "Unknown gate",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/GateNotFound",
+                      "title": "Gate 'G9' does not exist for the active event.",
+                      "status": 422,
+                      "code": "GateNotFound",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  },
+                  "Device mismatch": {
+                    "summary": "Device mismatch",
+                    "value": {
+                      "type": "https://tickets.example.com/problems/DeviceMismatch",
+                      "title": "deviceId does not match the device this access token was issued to. Sign in again from this device.",
+                      "status": 422,
+                      "code": "DeviceMismatch",
+                      "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Scan rate exceeded (30 per 10 seconds per officer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Validation service unavailable (`result: TemporarilyUnavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketScanResponse"
+                },
+                "example": {
+                  "result": "TemporarilyUnavailable",
+                  "admissionGranted": false,
+                  "message": "Validation service temporarily unavailable. Nothing was changed - retry with the same clientScanId.",
+                  "ticket": null,
+                  "replayed": false,
+                  "clientScanId": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f",
+                  "processedAtUtc": "2026-10-03T15:02:11.000Z",
+                  "correlationId": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/ticket-scans/sync": {
+      "post": {
+        "tags": [
+          "TicketScans"
+        ],
+        "summary": "Batch reconciliation of scans captured while offline (disabled unless `Scanning:OfflineSyncEnabled` is true).",
+        "description": "Each item is validated against the authoritative database state exactly like a live scan and reported individually; tickets already admitted\r\non another device come back as `AlreadyUsed`. **Risk (documented):** admitting offline means the same ticket may have entered at another\r\ngate - offline mode must be an explicit business decision. Default: HTTP 501.\n\n**Requires:** Bearer token; role GateScanner or Administrator (GateScanner, Admin, SuperAdmin).",
+        "parameters": [
+          {
+            "name": "X-Correlation-ID",
+            "in": "header",
+            "description": "Optional client correlation id (letters, digits, '-'; max 64). Echoed back in the response header and body.",
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineSyncRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineSyncRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineSyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-item results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineSyncResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Offline synchronisation is disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked access token."
+          },
+          "403": {
+            "description": "The role is not permitted to perform this operation."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AttendeeDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "John Doe"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "refreshToken": {
+            "type": "string",
+            "example": "mZ1n7k...rotating-refresh-token"
+          },
+          "tokenType": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "expiresIn": {
+            "type": "integer",
+            "description": "Access-token lifetime in seconds.",
+            "format": "int32",
+            "example": 900
+          },
+          "refreshExpiresIn": {
+            "type": "integer",
+            "description": "Refresh-token lifetime in seconds.",
+            "format": "int32",
+            "example": 604800
+          },
+          "accessTokenExpiresAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-07T10:15:00Z"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AuthUserDto"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AuthUserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Secure user reference (GUID, not sequential).",
+            "example": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+          },
+          "name": {
+            "type": "string",
+            "example": "Scanning Officer"
+          },
+          "username": {
+            "type": "string",
+            "example": "scanner1@example.org"
+          },
+          "role": {
+            "type": "string",
+            "description": "API role: `Administrator` or `GateScanner`.",
+            "example": "GateScanner"
+          },
+          "defaultGate": {
+            "$ref": "#/components/schemas/GateRefDto"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CategoryRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "example": 2
+          },
+          "code": {
+            "type": "string",
+            "example": "VVIP"
+          },
+          "name": {
+            "type": "string",
+            "example": "VVIP"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateScannerDeviceRequest": {
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "minLength": 2,
+            "type": "string",
+            "example": "Gate 1 - phone A"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subset of Ticket, GenZ, DinnerPass. Empty = all three.",
+            "nullable": true
+          },
+          "gateCode": {
+            "maxLength": 20,
+            "type": "string",
+            "description": "Gate to attribute ticket admissions to (reports). Empty = the virtual gate `Scanner:DefaultGateCode` (MOBILE).",
+            "nullable": true,
+            "example": "G1"
+          },
+          "expiresAtUtc": {
+            "type": "string",
+            "description": "Optional hard expiry of the device credential (e.g. the day after the event).",
+            "format": "date-time",
+            "nullable": true
+          },
+          "enrolmentMinutes": {
+            "maximum": 1440,
+            "minimum": 5,
+            "type": "integer",
+            "description": "How long the enrolment code stays valid (default from configuration, 30 minutes).",
+            "format": "int32",
+            "nullable": true,
+            "example": 30
+          }
+        },
+        "additionalProperties": false
+      },
+      "CustomerDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Jane Doe"
+          },
+          "phone": {
+            "type": "string",
+            "description": "E.164 phone; masked for gate scanners (e.g. +2567*****00).",
+            "nullable": true,
+            "example": "+256700000000"
+          },
+          "email": {
+            "type": "string",
+            "description": "Masked for gate scanners (e.g. j***@example.com).",
+            "nullable": true,
+            "example": "jane@example.com"
+          },
+          "isMasked": {
+            "type": "boolean",
+            "description": "True when contact details were masked for the caller's role.",
+            "example": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "EntryReversalRequest": {
+        "required": [
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "reason": {
+            "maxLength": 500,
+            "minLength": 5,
+            "type": "string",
+            "example": "Scanned by mistake at the wrong gate"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EntryStateDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`NotEntered` or `Entered`.",
+            "example": "Entered"
+          },
+          "atUtc": {
+            "type": "string",
+            "description": "Server UTC time of the first admission; null until entered.",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-10-03T16:14:05.000Z"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Entry state of one credential for one checkpoint."
+      },
+      "GateDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Public gate reference (gate code).",
+            "example": "G1"
+          },
+          "name": {
+            "type": "string",
+            "example": "Main Gate"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean",
+            "example": true
+          },
+          "opensAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "closesAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "isOpenNow": {
+            "type": "boolean",
+            "description": "Active and inside the opening window at the time of the request.",
+            "example": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "GateRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "G1"
+          },
+          "name": {
+            "type": "string",
+            "example": "Main Gate"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Reference to a gate. The public identifier is the gate code, never the database id."
+      },
+      "ItemResponseOfListOfGateDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateDto"
+            },
+            "nullable": true
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for single resources."
+      },
+      "ItemResponseOfListOfScannerDeviceAdminDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScannerDeviceAdminDto"
+            },
+            "nullable": true
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for single resources."
+      },
+      "ItemResponseOfListOfTicketCategoryDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketCategoryDto"
+            },
+            "nullable": true
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for single resources."
+      },
+      "ItemResponseOfScannerDeviceAdminDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ScannerDeviceAdminDto"
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for single resources."
+      },
+      "ItemResponseOfScannerDeviceEnrolmentResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ScannerDeviceEnrolmentResponse"
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for single resources."
+      },
+      "ItemResponseOfTicketDetailDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TicketDetailDto"
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for single resources."
+      },
+      "ItemResponseOfTicketStatusChangeResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TicketStatusChangeResponse"
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for single resources."
+      },
+      "LoginRequest": {
+        "required": [
+          "deviceId",
+          "password",
+          "username"
+        ],
+        "type": "object",
+        "properties": {
+          "username": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string",
+            "description": "User name (the e-mail address used for the ETMS web application).",
+            "example": "scanner1@example.org"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string",
+            "example": "secure-password"
+          },
+          "deviceId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:-]{4,100}$",
+            "type": "string",
+            "description": "Stable installation identifier generated by the Flutter app (stored in secure storage). Tokens are bound to it.",
+            "example": "flutter-3f6c2a8e7b1d4c5e"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Credentials of a scanning officer or administrator plus the identifier of the device requesting tokens."
+      },
+      "LogoutRequest": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "maxLength": 512,
+            "type": "string",
+            "description": "Refresh token of this device (revoked together with its rotation family). Optional: without it only the access token is revoked.",
+            "nullable": true
+          },
+          "allDevices": {
+            "type": "boolean",
+            "description": "Revoke every refresh token of the current user on every device.",
+            "example": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "MeResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/AuthUserDto"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All ETMS roles held by the user."
+          },
+          "deviceId": {
+            "type": "string",
+            "example": "flutter-3f6c2a8e7b1d4c5e"
+          },
+          "accessTokenExpiresAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-07T10:15:00Z"
+          },
+          "activeEventName": {
+            "type": "string",
+            "example": "INDIA DAY 2026"
+          },
+          "activeEventStartsAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-03T14:45:00Z"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OfflineSyncRequest": {
+        "required": [
+          "scans"
+        ],
+        "type": "object",
+        "properties": {
+          "scans": {
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketScanRequest"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OfflineSyncResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketScanResponse"
+            }
+          },
+          "correlationId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PagedResponseOfRecentScanDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecentScanDto"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          },
+          "correlationId": {
+            "type": "string",
+            "description": "Request correlation id (also returned in the X-Correlation-ID header).",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for paged collections."
+      },
+      "PagedResponseOfTicketSummaryDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketSummaryDto"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          },
+          "correlationId": {
+            "type": "string",
+            "description": "Request correlation id (also returned in the X-Correlation-ID header).",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Envelope for paged collections."
+      },
+      "PaginationMetadata": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "example": 1
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32",
+            "example": 50
+          },
+          "totalRecords": {
+            "type": "integer",
+            "format": "int32",
+            "example": 10000
+          },
+          "totalPages": {
+            "type": "integer",
+            "format": "int32",
+            "example": 200
+          },
+          "hasNextPage": {
+            "type": "boolean",
+            "example": true
+          },
+          "hasPreviousPage": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Pagination metadata returned with every paged list."
+      },
+      "PaymentDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Paid, PartiallyPaid, Pending or Waived (free, complimentary and invitation tickets).",
+            "example": "Paid"
+          },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "example": 800
+          },
+          "currency": {
+            "type": "string",
+            "example": "UGX"
+          },
+          "method": {
+            "type": "string",
+            "nullable": true,
+            "example": "PESAPAL"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": { }
+      },
+      "ReEnrolScannerDeviceRequest": {
+        "type": "object",
+        "properties": {
+          "enrolmentMinutes": {
+            "maximum": 1440,
+            "minimum": 5,
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "example": 30
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecentScanDto": {
+        "type": "object",
+        "properties": {
+          "scanId": {
+            "type": "integer",
+            "format": "int64",
+            "example": 1234
+          },
+          "scannedAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-03T15:02:11Z"
+          },
+          "result": {
+            "type": "string",
+            "example": "Valid"
+          },
+          "admissionGranted": {
+            "type": "boolean",
+            "example": true
+          },
+          "isReversed": {
+            "type": "boolean",
+            "example": false
+          },
+          "ticketId": {
+            "type": "string",
+            "nullable": true,
+            "example": "0f8fad5b-d9cb-469f-a165-70867728950e"
+          },
+          "ticketNumber": {
+            "type": "string",
+            "nullable": true,
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          "attendeeName": {
+            "type": "string",
+            "nullable": true,
+            "example": "John Doe"
+          },
+          "category": {
+            "type": "string",
+            "nullable": true,
+            "example": "VVIP"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/GateRefDto"
+          },
+          "officerName": {
+            "type": "string",
+            "example": "Scanning Officer"
+          },
+          "deviceId": {
+            "type": "string",
+            "nullable": true,
+            "example": "flutter-3f6c2a8e7b1d4c5e"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true,
+            "example": "Ticket valid. Entry granted."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RefreshRequest": {
+        "required": [
+          "deviceId",
+          "refreshToken"
+        ],
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+            "example": "rotating-refresh-token"
+          },
+          "deviceId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string",
+            "example": "flutter-3f6c2a8e7b1d4c5e"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RevokeScannerDeviceRequest": {
+        "required": [
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "reason": {
+            "maxLength": 200,
+            "minLength": 3,
+            "type": "string",
+            "example": "Phone reported lost"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RevokeSessionsRequest": {
+        "required": [
+          "userId"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid",
+            "example": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+          },
+          "reason": {
+            "maxLength": 200,
+            "type": "string",
+            "nullable": true,
+            "example": "Device reported lost"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Administrator request to terminate every session of a user (e.g. lost device)."
+      },
+      "RevokeSessionsResponse": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "refreshTokensRevoked": {
+            "type": "integer",
+            "format": "int32",
+            "example": 3
+          },
+          "revokedAtUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannedTicketDto": {
+        "type": "object",
+        "properties": {
+          "ticketNumber": {
+            "type": "string",
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          "attendeeName": {
+            "type": "string",
+            "nullable": true,
+            "example": "John Doe"
+          },
+          "category": {
+            "type": "string",
+            "nullable": true,
+            "example": "VVIP"
+          },
+          "ticketType": {
+            "type": "string",
+            "nullable": true,
+            "example": "Paid"
+          },
+          "status": {
+            "type": "string",
+            "example": "Used"
+          },
+          "tableNumber": {
+            "type": "string",
+            "description": "Table the attendee is seated at, for table-booked categories (VVIP Platinum, VVIP, VIP, Deluxe) and sponsor table\r\nallocations - direct the guest to it. Null for quantity categories. Added 2026-09-27 (schema 1.4.1).",
+            "nullable": true,
+            "example": "VIP-042"
+          },
+          "entryTimeUtc": {
+            "type": "string",
+            "description": "Server entry time of THIS admission (Valid only).",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-10-03T15:02:11Z"
+          },
+          "gate": {
+            "type": "string",
+            "nullable": true,
+            "example": "Main Gate"
+          },
+          "previousEntryTimeUtc": {
+            "type": "string",
+            "description": "Entry time of the earlier admission (AlreadyUsed only).",
+            "format": "date-time",
+            "nullable": true
+          },
+          "previousGate": {
+            "type": "string",
+            "nullable": true,
+            "example": "Main Gate"
+          },
+          "genZAccess": {
+            "type": "boolean",
+            "description": "True only while the attendee's Gen-Z entitlement is paid and active.",
+            "example": false
+          },
+          "genZStatus": {
+            "type": "string",
+            "description": "NotSelected | PendingPayment | Active | Cancelled | Refunded | Used.",
+            "example": "NotSelected"
+          },
+          "genZAccessStartTime": {
+            "type": "string",
+            "description": "Local (event time) \"HH:mm\" the Gen-Z area opens; present only when the attendee holds the add-on.",
+            "nullable": true,
+            "example": "22:30"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerCredentialDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`Ticket` or `DinnerPass`.",
+            "example": "Ticket"
+          },
+          "ticketNumber": {
+            "type": "string",
+            "nullable": true,
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          "passNumber": {
+            "type": "string",
+            "nullable": true,
+            "example": "CDP-7K3M2Q9X"
+          },
+          "attendeeName": {
+            "type": "string",
+            "description": "Attendee (ticket) or recipient (dinner pass) name - the only personal data returned.",
+            "nullable": true,
+            "example": "John Doe"
+          },
+          "category": {
+            "type": "string",
+            "nullable": true,
+            "example": "VVIP"
+          },
+          "ticketType": {
+            "type": "string",
+            "nullable": true,
+            "example": "Paid"
+          },
+          "tableNumber": {
+            "type": "string",
+            "description": "Table for table-booked categories and sponsor tables; null otherwise.",
+            "nullable": true,
+            "example": "VIP-042"
+          },
+          "status": {
+            "type": "string",
+            "description": "Ticket status (Issued, Used, Cancelled, …) or pass status (Issued, Used, Cancelled) AFTER this scan.",
+            "nullable": true,
+            "example": "Used"
+          },
+          "genZEntitled": {
+            "type": "boolean",
+            "description": "Ticket scans only: whether the ticket carries a paid, active Gen-Z entitlement (so the operator can point the guest to the Gen-Z checkpoint).",
+            "nullable": true,
+            "example": false
+          },
+          "batchReference": {
+            "type": "string",
+            "description": "Dinner passes only: batch reference of the issuance.",
+            "nullable": true,
+            "example": "CDP-7K3M-2Q9X"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The credential the scan resolved to (never the QR payload itself)."
+      },
+      "ScannerDeviceAdminDto": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gateCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "description": "PendingEnrolment, EnrolmentExpired, Active, Expired, Revoked."
+          },
+          "createdAtUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "enrolledAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deviceLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "platform": {
+            "type": "string",
+            "nullable": true
+          },
+          "appVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "tokenHint": {
+            "type": "string",
+            "description": "Last four characters of the current token, to tell devices apart in support calls.",
+            "nullable": true
+          },
+          "lastSeenAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "scanCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "expiresAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerDeviceEnrolmentResponse": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enrolmentCode": {
+            "type": "string",
+            "description": "Single-use code to type into the app. Shown ONCE; only its hash is stored.",
+            "example": "K7MQ-P2XN-4H8V"
+          },
+          "enrolmentQr": {
+            "type": "string",
+            "description": "Text to render as the provisioning QR the app scans at first start.",
+            "example": "ETMSDEV.K7MQP2XN4H8V"
+          },
+          "enrolmentExpiresAtUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerDeviceInfo": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "eventName": {
+            "type": "string",
+            "example": "INDIA DAY 2026"
+          },
+          "eventStartsAtUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "eventTimeZoneId": {
+            "type": "string",
+            "example": "Africa/Kampala"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ScannerSettingsDto"
+          },
+          "tokenExpiresAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "serverTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "correlationId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerDinnerPassRecord": {
+        "type": "object",
+        "properties": {
+          "passId": {
+            "type": "integer",
+            "description": "Stable pass id (upsert key together with passNumber).",
+            "format": "int32",
+            "example": 1042
+          },
+          "passNumber": {
+            "type": "string",
+            "example": "CDP-7K3M2Q9X"
+          },
+          "recipientName": {
+            "type": "string",
+            "example": "Jane Doe"
+          },
+          "batchReference": {
+            "type": "string",
+            "example": "CDP-7K3M-2Q9X"
+          },
+          "status": {
+            "type": "string",
+            "description": "Issued, Used, Cancelled.",
+            "example": "Issued"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/EntryStateDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One Corporate Dinner pass as the scanner app needs it. The QR token is never included."
+      },
+      "ScannerEnrolRequest": {
+        "required": [
+          "enrolmentCode"
+        ],
+        "type": "object",
+        "properties": {
+          "enrolmentCode": {
+            "maxLength": 60,
+            "minLength": 8,
+            "type": "string",
+            "description": "12-character code (dashes/spaces ignored, case-insensitive) or the full provisioning QR text `ETMSDEV.…`.",
+            "example": "K7MQ-P2XN-4H8V"
+          },
+          "deviceLabel": {
+            "maxLength": 100,
+            "type": "string",
+            "description": "Free label the app reports (model / position), shown to administrators.",
+            "nullable": true,
+            "example": "Samsung A54 - Gate 1"
+          },
+          "platform": {
+            "maxLength": 50,
+            "type": "string",
+            "nullable": true,
+            "example": "android"
+          },
+          "appVersion": {
+            "maxLength": 30,
+            "type": "string",
+            "nullable": true,
+            "example": "1.0.3"
+          }
+        },
+        "additionalProperties": false,
+        "description": "First start of the app: exchange the administrator-issued enrolment code (typed or scanned from the provisioning QR) for the device token."
+      },
+      "ScannerEnrolResponse": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "integer",
+            "format": "int32",
+            "example": 12
+          },
+          "deviceName": {
+            "type": "string",
+            "example": "Gate 1 - phone A"
+          },
+          "deviceToken": {
+            "type": "string",
+            "description": "The device credential. Shown ONCE. Store in platform secure storage and send as `X-Device-Token` on every scanner call.",
+            "example": "etmsd1.pJ3qXk…"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ticket, GenZ, DinnerPass - the actions this device may perform."
+          },
+          "tokenExpiresAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "eventName": {
+            "type": "string",
+            "example": "INDIA DAY 2026"
+          },
+          "serverTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerRotateResponse": {
+        "type": "object",
+        "properties": {
+          "deviceToken": {
+            "type": "string",
+            "description": "The new device token. The previous one keeps working for a short grace period so an interrupted rotation cannot lock the device out."
+          },
+          "rotatedAtUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "previousTokenValidUntilUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerScanRequest": {
+        "required": [
+          "clientScanId",
+          "qrPayload"
+        ],
+        "type": "object",
+        "properties": {
+          "qrPayload": {
+            "maxLength": 600,
+            "minLength": 6,
+            "type": "string",
+            "description": "Complete text decoded from the QR code (ticket: `ETMS.…`; dinner pass: `CDP1.…`).",
+            "example": "ETMS.AQEBAAAAX1pdY2pLQ1J0XJ3q6IzDHqFq5HpGpWlq.k7fB7Ep9G3c8MfJ0nZ4x2QXhYh7Wq1a6qE6gYq0d5tE"
+          },
+          "clientScanId": {
+            "type": "string",
+            "description": "UUID generated by the app for this physical scan and persisted until a final result is stored. Retrying with the same id replays the original result.",
+            "format": "uuid",
+            "example": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f"
+          },
+          "scannedAtUtc": {
+            "type": "string",
+            "description": "Device clock at scan time - diagnostic only; the server clock is the entry time.",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-10-03T15:02:09Z"
+          },
+          "offlineDecision": {
+            "maxLength": 20,
+            "pattern": "^(Admitted|Rejected)$",
+            "type": "string",
+            "description": "What the app showed the operator while offline: `Admitted` (provisional green), `Rejected`, or null for a live scan.\r\nUsed by `/scanner/sync` to flag a conflict when the server's authoritative outcome differs.",
+            "nullable": true,
+            "example": "Admitted"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Body of the three scan endpoints. No gate, no operator, no device id: the device is the credential in the `X-Device-Token` header."
+      },
+      "ScannerScanResponse": {
+        "type": "object",
+        "properties": {
+          "scanType": {
+            "enum": [
+              "Ticket",
+              "GenZ",
+              "DinnerPass"
+            ],
+            "type": "string",
+            "description": "The three actions of the scanner app.",
+            "example": "Ticket"
+          },
+          "result": {
+            "enum": [
+              "Valid",
+              "AlreadyUsed",
+              "Invalid",
+              "WrongCredentialType",
+              "NotEligible",
+              "Cancelled",
+              "Replaced",
+              "NotIssued",
+              "NotPaid",
+              "WrongEvent",
+              "Expired",
+              "BeforeStartTime",
+              "EntryRequired",
+              "DuplicateRequest",
+              "TemporarilyUnavailable"
+            ],
+            "type": "string",
+            "description": "Stable outcome of a scanner-app scan. Every processed outcome is HTTP 200; the app renders one of three screens from `admissionGranted` / `result`.",
+            "example": "Valid"
+          },
+          "admissionGranted": {
+            "type": "boolean",
+            "description": "True only when THIS request (or the original request this one replays) recorded the first admission.",
+            "example": true
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "True when the response replays the stored outcome of an earlier request with the same clientScanId.",
+            "example": false
+          },
+          "message": {
+            "type": "string",
+            "description": "Operator-facing text, e.g. \"Entry granted.\" or \"Already scanned at 7:14 PM\".",
+            "example": "Entry granted."
+          },
+          "firstEntryAtUtc": {
+            "type": "string",
+            "description": "Server UTC time of the FIRST admission of this credential (set for Valid and AlreadyUsed). Never changes afterwards.",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-10-03T16:14:05.000Z"
+          },
+          "firstEntryLocal": {
+            "type": "string",
+            "description": "The same instant in event local time, ready to display (\"7:14 PM\").",
+            "nullable": true,
+            "example": "7:14 PM"
+          },
+          "reEntryAllowed": {
+            "type": "boolean",
+            "description": "Gen-Z only: the organisers allow re-entry, so an `AlreadyUsed` guest may pass again (the first entry time still stands).",
+            "example": false
+          },
+          "accessStartTime": {
+            "type": "string",
+            "description": "Gen-Z only: local \"HH:mm\" the area opens (also returned with BeforeStartTime).",
+            "nullable": true,
+            "example": "22:30"
+          },
+          "credential": {
+            "$ref": "#/components/schemas/ScannerCredentialDto"
+          },
+          "clientScanId": {
+            "type": "string",
+            "format": "uuid",
+            "example": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f"
+          },
+          "processedAtUtc": {
+            "type": "string",
+            "description": "Server time the scan was processed.",
+            "format": "date-time"
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerSettingsDto": {
+        "type": "object",
+        "properties": {
+          "genZAccessStartTime": {
+            "type": "string",
+            "example": "22:30"
+          },
+          "genZSingleEntry": {
+            "type": "boolean",
+            "example": false
+          },
+          "genZRequiresTicketEntry": {
+            "type": "boolean",
+            "example": false
+          },
+          "enforceGenZAccessStartTime": {
+            "type": "boolean",
+            "example": true
+          },
+          "syncBatchMax": {
+            "type": "integer",
+            "format": "int32",
+            "example": 200
+          },
+          "downloadPageMax": {
+            "type": "integer",
+            "format": "int32",
+            "example": 1000
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerSyncItem": {
+        "required": [
+          "clientScanId",
+          "qrPayload",
+          "scanType"
+        ],
+        "type": "object",
+        "properties": {
+          "qrPayload": {
+            "maxLength": 600,
+            "minLength": 6,
+            "type": "string",
+            "description": "Complete text decoded from the QR code (ticket: `ETMS.…`; dinner pass: `CDP1.…`).",
+            "example": "ETMS.AQEBAAAAX1pdY2pLQ1J0XJ3q6IzDHqFq5HpGpWlq.k7fB7Ep9G3c8MfJ0nZ4x2QXhYh7Wq1a6qE6gYq0d5tE"
+          },
+          "clientScanId": {
+            "type": "string",
+            "description": "UUID generated by the app for this physical scan and persisted until a final result is stored. Retrying with the same id replays the original result.",
+            "format": "uuid",
+            "example": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f"
+          },
+          "scannedAtUtc": {
+            "type": "string",
+            "description": "Device clock at scan time - diagnostic only; the server clock is the entry time.",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-10-03T15:02:09Z"
+          },
+          "offlineDecision": {
+            "maxLength": 20,
+            "pattern": "^(Admitted|Rejected)$",
+            "type": "string",
+            "description": "What the app showed the operator while offline: `Admitted` (provisional green), `Rejected`, or null for a live scan.\r\nUsed by `/scanner/sync` to flag a conflict when the server's authoritative outcome differs.",
+            "nullable": true,
+            "example": "Admitted"
+          },
+          "scanType": {
+            "enum": [
+              "Ticket",
+              "GenZ",
+              "DinnerPass"
+            ],
+            "type": "string",
+            "description": "The three actions of the scanner app.",
+            "example": "Ticket"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One offline-captured scan inside a sync batch."
+      },
+      "ScannerSyncItemResult": {
+        "type": "object",
+        "properties": {
+          "clientScanId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scanType": {
+            "enum": [
+              "Ticket",
+              "GenZ",
+              "DinnerPass"
+            ],
+            "type": "string",
+            "description": "The three actions of the scanner app."
+          },
+          "accepted": {
+            "type": "boolean",
+            "description": "True when the server processed the item and stored a final outcome (any result but TemporarilyUnavailable). False = keep it queued and resend.",
+            "example": true
+          },
+          "conflict": {
+            "type": "boolean",
+            "description": "True when the app had shown \"Admitted\" offline but the server's authoritative outcome is different (usually AlreadyUsed: another device admitted the same credential first). Show the operator the server result.",
+            "example": false
+          },
+          "response": {
+            "$ref": "#/components/schemas/ScannerScanResponse"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerSyncPageOfScannerDinnerPassRecord": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScannerDinnerPassRecord"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Opaque cursor to pass as `?cursor=` on the next call. Store it once every page of a run has been applied.",
+            "example": "djE6MTIzNDU2Nzg5OjQyMQ"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "True when more records are waiting: call again immediately with `nextCursor`.",
+            "example": false
+          },
+          "serverTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "correlationId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Incremental download page. Items are upserts keyed by ticketId / passNumber; a record may appear again when it changed."
+      },
+      "ScannerSyncPageOfScannerTicketRecord": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScannerTicketRecord"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Opaque cursor to pass as `?cursor=` on the next call. Store it once every page of a run has been applied.",
+            "example": "djE6MTIzNDU2Nzg5OjQyMQ"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "True when more records are waiting: call again immediately with `nextCursor`.",
+            "example": false
+          },
+          "serverTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "correlationId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Incremental download page. Items are upserts keyed by ticketId / passNumber; a record may appear again when it changed."
+      },
+      "ScannerSyncRequest": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "maxItems": 200,
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScannerSyncItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerSyncResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScannerSyncItemResult"
+            }
+          },
+          "accepted": {
+            "type": "integer",
+            "format": "int32",
+            "example": 5
+          },
+          "conflicts": {
+            "type": "integer",
+            "format": "int32",
+            "example": 1
+          },
+          "serverTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "correlationId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScannerTicketRecord": {
+        "type": "object",
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "description": "Public ticket reference. Equals the secure id inside the ticket QR body, so the app can match a scanned code offline (the signature can NOT be checked offline).",
+            "example": "0f8fad5b-d9cb-469f-a165-70867728950e"
+          },
+          "ticketNumber": {
+            "type": "string",
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          "attendeeName": {
+            "type": "string",
+            "example": "John Doe"
+          },
+          "categoryCode": {
+            "type": "string",
+            "example": "VVIP"
+          },
+          "categoryName": {
+            "type": "string",
+            "example": "VVIP"
+          },
+          "ticketType": {
+            "type": "string",
+            "example": "Paid"
+          },
+          "tableNumber": {
+            "type": "string",
+            "nullable": true,
+            "example": "VIP-042"
+          },
+          "status": {
+            "type": "string",
+            "description": "Pending, Approved, Issued, Used, Cancelled, Replaced, Rejected, Expired.",
+            "example": "Issued"
+          },
+          "eligibleForEntry": {
+            "type": "boolean",
+            "description": "Server view of \"would be admitted now\" (Issued and, for paid tickets, fully paid). Provisional for offline display only.",
+            "example": true
+          },
+          "entry": {
+            "$ref": "#/components/schemas/EntryStateDto"
+          },
+          "genZEntitled": {
+            "type": "boolean",
+            "description": "True when a paid, active Gen-Z entitlement exists for this ticket.",
+            "example": false
+          },
+          "genZStatus": {
+            "type": "string",
+            "description": "NotIncluded, PendingPayment, Active, Cancelled, Refunded, Used.",
+            "example": "NotIncluded"
+          },
+          "genZEntry": {
+            "$ref": "#/components/schemas/EntryStateDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One ticket as the scanner app needs it. No contact data, no QR payload."
+      },
+      "TicketCategoryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "example": 2
+          },
+          "code": {
+            "type": "string",
+            "example": "VVIP"
+          },
+          "name": {
+            "type": "string",
+            "example": "VVIP"
+          },
+          "price": {
+            "type": "number",
+            "format": "double",
+            "example": 750000
+          },
+          "currency": {
+            "type": "string",
+            "example": "UGX"
+          },
+          "ticketType": {
+            "type": "string",
+            "example": "Paid"
+          },
+          "isActive": {
+            "type": "boolean",
+            "example": true
+          },
+          "displayColour": {
+            "type": "string",
+            "example": "#8B0000"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32",
+            "example": 2
+          }
+        },
+        "additionalProperties": false
+      },
+      "TicketDetailDto": {
+        "type": "object",
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "description": "Secure public ticket reference (random 128-bit GUID, never the database id).",
+            "example": "0f8fad5b-d9cb-469f-a165-70867728950e"
+          },
+          "ticketNumber": {
+            "type": "string",
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          "status": {
+            "type": "string",
+            "example": "Issued"
+          },
+          "ticketType": {
+            "type": "string",
+            "example": "Paid"
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryRefDto"
+          },
+          "attendee": {
+            "$ref": "#/components/schemas/AttendeeDto"
+          },
+          "customer": {
+            "$ref": "#/components/schemas/CustomerDto"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentDto"
+          },
+          "issueDateUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-09-07T10:00:00Z"
+          },
+          "scannedDateUtc": {
+            "type": "string",
+            "description": "Entry time recorded by the server (null until admitted).",
+            "format": "date-time",
+            "nullable": true
+          },
+          "gate": {
+            "$ref": "#/components/schemas/GateRefDto"
+          },
+          "tableNumber": {
+            "type": "string",
+            "description": "Table the attendee is seated at, for table-booked categories (VVIP Platinum, VVIP, VIP, Deluxe) and sponsor table allocations;\r\nnull for quantity categories (Executive Dignitaries, Gold, Silver, child categories). Added 2026-09-27.",
+            "nullable": true,
+            "example": "VIP-042"
+          },
+          "bookingReference": {
+            "type": "string",
+            "example": "BK260907-ABC123"
+          },
+          "bookingQuantity": {
+            "type": "integer",
+            "description": "Number of tickets in the same booking.",
+            "format": "int32",
+            "example": 2
+          },
+          "createdAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-07T09:58:00Z"
+          },
+          "cancelledAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "cancelReason": {
+            "type": "string",
+            "description": "Administrators only.",
+            "nullable": true
+          },
+          "replacedByTicketNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "replacesTicketNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "rowVersion": {
+            "type": "string",
+            "description": "Optimistic-concurrency token required by `PATCH /tickets/{ticketId}/status` (administrators only).",
+            "nullable": true,
+            "example": "AAAAAAAAB9E="
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusHistoryDto"
+            },
+            "description": "Administrators only.",
+            "nullable": true
+          },
+          "scans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketScanHistoryDto"
+            }
+          },
+          "genZAccess": {
+            "type": "boolean",
+            "description": "True only while the attendee's Gen-Z entitlement is paid and active.",
+            "example": false
+          },
+          "genZStatus": {
+            "type": "string",
+            "description": "NotSelected | PendingPayment | Active | Cancelled | Refunded | Used.",
+            "example": "NotSelected"
+          },
+          "genZAccessStartTime": {
+            "type": "string",
+            "description": "Local (event time) \"HH:mm\" the Gen-Z area opens; present only when the attendee holds the add-on.",
+            "nullable": true,
+            "example": "22:30"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TicketScanHistoryDto": {
+        "type": "object",
+        "properties": {
+          "scannedAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-03T15:02:11Z"
+          },
+          "result": {
+            "type": "string",
+            "example": "Valid"
+          },
+          "isAdmission": {
+            "type": "boolean",
+            "example": true
+          },
+          "isReversed": {
+            "type": "boolean",
+            "example": false
+          },
+          "gate": {
+            "$ref": "#/components/schemas/GateRefDto"
+          },
+          "officerName": {
+            "type": "string",
+            "example": "Scanning Officer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TicketScanRequest": {
+        "required": [
+          "clientScanId",
+          "deviceId",
+          "gateId",
+          "qrPayload"
+        ],
+        "type": "object",
+        "properties": {
+          "qrPayload": {
+            "maxLength": 512,
+            "minLength": 10,
+            "type": "string",
+            "description": "Complete text decoded from the QR code (ETMS.<payload>.<signature>).",
+            "example": "ETMS.AQEBAAAAX1pdY2pLQ1J0XJ3q6IzDHqFq5HpGpWlq.k7fB7Ep9G3c8MfJ0nZ4x2QXhYh7Wq1a6qE6gYq0d5tE"
+          },
+          "gateId": {
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]{1,20}$",
+            "type": "string",
+            "description": "Gate code (from `GET /gates`).",
+            "example": "G1"
+          },
+          "deviceId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string",
+            "description": "Must equal the device the access token was issued to.",
+            "example": "flutter-3f6c2a8e7b1d4c5e"
+          },
+          "clientScanId": {
+            "type": "string",
+            "description": "UUID generated by the app for this physical scan. Re-sending the same id returns the original result (idempotent retry).",
+            "format": "uuid",
+            "example": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f"
+          },
+          "scannedAtUtc": {
+            "type": "string",
+            "description": "Device clock at scan time - diagnostic only, never used as the entry time.",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-10-03T15:02:09Z"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Body of `POST /api/v1/ticket-scans`. The scanning officer is the authenticated user - never sent in the body."
+      },
+      "TicketScanResponse": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "enum": [
+              "Valid",
+              "AlreadyUsed",
+              "Invalid",
+              "Cancelled",
+              "Replaced",
+              "NotPaid",
+              "NotIssued",
+              "WrongEvent",
+              "Expired",
+              "UnauthorizedGate",
+              "DuplicateRequest",
+              "TemporarilyUnavailable"
+            ],
+            "type": "string",
+            "description": "Stable machine-readable scan outcome.",
+            "example": "Valid"
+          },
+          "admissionGranted": {
+            "type": "boolean",
+            "example": true
+          },
+          "message": {
+            "type": "string",
+            "example": "Ticket valid. Entry granted."
+          },
+          "ticket": {
+            "$ref": "#/components/schemas/ScannedTicketDto"
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "True when this response replays the result of an earlier request with the same clientScanId.",
+            "example": false
+          },
+          "clientScanId": {
+            "type": "string",
+            "format": "uuid",
+            "example": "9b2d0d3e-5c4a-4f0a-9d7e-2a1b3c4d5e6f"
+          },
+          "processedAtUtc": {
+            "type": "string",
+            "description": "Server time the scan was processed.",
+            "format": "date-time",
+            "example": "2026-10-03T15:02:11Z"
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "7f3d2c1a9b8e4f0c8a1b2c3d4e5f6a7b"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TicketStatusChangeResponse": {
+        "type": "object",
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "example": "0f8fad5b-d9cb-469f-a165-70867728950e"
+          },
+          "ticketNumber": {
+            "type": "string",
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          "previousStatus": {
+            "type": "string",
+            "example": "Issued"
+          },
+          "newStatus": {
+            "type": "string",
+            "example": "Cancelled"
+          },
+          "changedAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-07T10:30:02Z"
+          },
+          "changedBy": {
+            "type": "string",
+            "example": "admin@example.org"
+          },
+          "reason": {
+            "type": "string",
+            "example": "Refund approved"
+          },
+          "rowVersion": {
+            "type": "string",
+            "nullable": true,
+            "example": "AAAAAAAAB9I="
+          }
+        },
+        "additionalProperties": false
+      },
+      "TicketStatusHistoryDto": {
+        "type": "object",
+        "properties": {
+          "fromStatus": {
+            "type": "string",
+            "nullable": true,
+            "example": "Issued"
+          },
+          "toStatus": {
+            "type": "string",
+            "example": "Used"
+          },
+          "changedAtUtc": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-10-03T15:02:11Z"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": "Admitted at gate 1 via mobile API"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TicketSummaryDto": {
+        "type": "object",
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "description": "Secure public ticket reference (random 128-bit GUID, never the database id).",
+            "example": "0f8fad5b-d9cb-469f-a165-70867728950e"
+          },
+          "ticketNumber": {
+            "type": "string",
+            "example": "INDIAD-X7K9-P2MQ-4H8N"
+          },
+          "status": {
+            "type": "string",
+            "example": "Issued"
+          },
+          "ticketType": {
+            "type": "string",
+            "example": "Paid"
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryRefDto"
+          },
+          "attendee": {
+            "$ref": "#/components/schemas/AttendeeDto"
+          },
+          "customer": {
+            "$ref": "#/components/schemas/CustomerDto"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentDto"
+          },
+          "issueDateUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2026-09-07T10:00:00Z"
+          },
+          "scannedDateUtc": {
+            "type": "string",
+            "description": "Entry time recorded by the server (null until admitted).",
+            "format": "date-time",
+            "nullable": true
+          },
+          "gate": {
+            "$ref": "#/components/schemas/GateRefDto"
+          },
+          "tableNumber": {
+            "type": "string",
+            "description": "Table the attendee is seated at, for table-booked categories (VVIP Platinum, VVIP, VIP, Deluxe) and sponsor table allocations;\r\nnull for quantity categories (Executive Dignitaries, Gold, Silver, child categories). Added 2026-09-27.",
+            "nullable": true,
+            "example": "VIP-042"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateTicketStatusRequest": {
+        "required": [
+          "reason",
+          "rowVersion",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "maxLength": 20,
+            "minLength": 1,
+            "type": "string",
+            "description": "Target status. Allowed: `Cancelled` (from Pending/Approved/Issued), `Expired` (from Issued), `Issued` (from Expired). Never `Used`.",
+            "example": "Cancelled"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 5,
+            "type": "string",
+            "example": "Refund approved"
+          },
+          "rowVersion": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+            "description": "Row version from `GET /tickets/{ticketId}`.",
+            "example": "AAAAAAAAB9E="
+          }
+        },
+        "additionalProperties": false,
+        "description": "Administrator-controlled status change. Gate scanners must use `POST /ticket-scans`."
+      },
+      "ValidationProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          },
+          "errors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "additionalProperties": { }
+      }
+    },
+    "securitySchemes": {
+      "Bearer": {
+        "type": "http",
+        "description": "Short-lived access token from POST /api/v1/auth/login. Send as: Authorization: Bearer {accessToken}",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "DeviceToken": {
+        "type": "apiKey",
+        "description": "Scanner app (no login): the provisioned device token from POST /api/v1/scanner/enrol. Send as: X-Device-Token: {deviceToken}",
+        "name": "X-Device-Token",
+        "in": "header"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Token authentication for the Flutter gate-scanning app."
+    },
+    {
+      "name": "CorporateDinnerPasses",
+      "description": "Corporate Dinner passes for the scanner app (no login). Same implementation as `/scanner/dinner-passes` and\r\n`/scanner/dinner-passes/scan`, exposed under the resource route the Flutter app uses. Authentication: header `X-Device-Token`\r\n(provisioned device credential) - the device is identified by that credential; no operator, gate or device id travels in the body."
+    },
+    {
+      "name": "ReferenceData",
+      "description": "Reference data of the active event."
+    },
+    {
+      "name": "Scanner",
+      "description": "Scanner app without login (2026-09-28). Authentication: header `X-Device-Token` (provisioned device credential, see\r\n`POST /scanner/enrol`). No gate, no operator and no device id travel in requests or responses."
+    },
+    {
+      "name": "ScannerDevices",
+      "description": "Administrator provisioning of scanner-app devices (officer/administrator JWT). The device itself never logs in."
+    },
+    {
+      "name": "Scans",
+      "description": "Scan history."
+    },
+    {
+      "name": "Tickets",
+      "description": "Tickets of the active event with permitted purchaser and attendee details."
+    },
+    {
+      "name": "TicketScans",
+      "description": "Real-time QR validation. The only way a ticket becomes `Used`."
+    }
+  ]
+}
